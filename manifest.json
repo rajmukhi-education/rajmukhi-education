@@ -1,0 +1,10 @@
+{
+  "name": "Rajmukhi Education V27",
+  "short_name": "Rajmukhi V27",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f4ff",
+  "theme_color": "#5a35b7",
+  "description": "Rajmukhi Education - Learn, Practice, Succeed",
+  "icons": []
+}

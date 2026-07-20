@@ -1,0 +1,42 @@
+{
+  "students": {
+    "id": "uuid",
+    "name": "string",
+    "email": "string",
+    "created_at": "timestamp"
+  },
+  "courses": {
+    "id": "uuid",
+    "title": "string",
+    "description": "string",
+    "lessons": "integer",
+    "created_at": "timestamp"
+  },
+  "notes": {
+    "id": "uuid",
+    "title": "string",
+    "description": "string",
+    "file_url": "string",
+    "created_at": "timestamp"
+  },
+  "notices": {
+    "id": "uuid",
+    "title": "string",
+    "message": "string",
+    "created_at": "timestamp"
+  },
+  "tests": {
+    "id": "uuid",
+    "title": "string",
+    "course_id": "uuid",
+    "questions": "json"
+  },
+  "results": {
+    "id": "uuid",
+    "student_id": "uuid",
+    "test_id": "uuid",
+    "score": "integer",
+    "total": "integer",
+    "created_at": "timestamp"
+  }
+}

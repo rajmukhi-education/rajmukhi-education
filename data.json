@@ -1,0 +1,119 @@
+{
+  "users": [],
+  "students": [],
+  "courses": [
+    {
+      "id": "course-science",
+      "title": "General Science",
+      "description": "Physics, Chemistry, Biology और सामान्य विज्ञान",
+      "lessons": 100,
+      "created_at": "2026-07-20T00:00:00.000Z"
+    },
+    {
+      "id": "course-math",
+      "title": "Mathematics",
+      "description": "Basic से Advanced Mathematics",
+      "lessons": 80,
+      "created_at": "2026-07-20T00:00:00.000Z"
+    },
+    {
+      "id": "course-reasoning",
+      "title": "Reasoning",
+      "description": "Verbal और Non-Verbal Reasoning",
+      "lessons": 65,
+      "created_at": "2026-07-20T00:00:00.000Z"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "lesson-science-1",
+      "course_id": "course-science",
+      "title": "Introduction to General Science",
+      "description": "विज्ञान की मूल अवधारणाएँ",
+      "content": "यह lesson विज्ञान की मूल अवधारणाओं से शुरू होता है।",
+      "order": 1
+    },
+    {
+      "id": "lesson-math-1",
+      "course_id": "course-math",
+      "title": "Number System Basics",
+      "description": "संख्या पद्धति की शुरुआत",
+      "content": "Natural, whole और integer numbers का परिचय।",
+      "order": 1
+    }
+  ],
+  "enrollments": [],
+  "progress": [],
+  "notes": [
+    {
+      "id": "note-science",
+      "title": "General Science Notes",
+      "description": "Study material",
+      "created_at": "2026-07-20T00:00:00.000Z"
+    },
+    {
+      "id": "note-math",
+      "title": "Mathematics Formula Book",
+      "description": "Important formulas",
+      "created_at": "2026-07-20T00:00:00.000Z"
+    },
+    {
+      "id": "note-reasoning",
+      "title": "Reasoning Practice Notes",
+      "description": "Topic-wise notes",
+      "created_at": "2026-07-20T00:00:00.000Z"
+    }
+  ],
+  "notices": [
+    {
+      "id": "notice-welcome",
+      "title": "Welcome",
+      "message": "Rajmukhi Education में आपका स्वागत है।",
+      "created_at": "2026-07-20T00:00:00.000Z"
+    }
+  ],
+  "videos": [],
+  "tests": [
+    {
+      "id": "test-gs-1",
+      "title": "General Science Quiz",
+      "course_id": "course-science",
+      "questions": [
+        {
+          "id": 1,
+          "question": "भारत की राजधानी क्या है?",
+          "options": [
+            "पटना",
+            "नई दिल्ली",
+            "मुंबई"
+          ],
+          "answer": 1
+        },
+        {
+          "id": 2,
+          "question": "पानी का रासायनिक सूत्र क्या है?",
+          "options": [
+            "H₂O",
+            "CO₂",
+            "O₂"
+          ],
+          "answer": 0
+        }
+      ]
+    }
+  ],
+  "results": [],
+  "sessions": [
+    {
+      "token": "5e0e517a05ac0a1b56131bc859fe59593d300bcb51ae6085cbb727cd3dd3722a",
+      "user_id": "admin",
+      "role": "admin",
+      "expires_at": "2026-07-27T18:45:04.406Z"
+    }
+  ],
+  "uploads": [],
+  "certificates": [],
+  "security_events": [],
+  "twofa_challenges": [],
+  "security_alerts": []
+}

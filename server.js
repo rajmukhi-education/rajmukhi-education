@@ -2,16 +2,63 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || 3000);
+const APP_VERSION = 'v50-production';
 const DB_FILE = path.join(__dirname, 'data.json');
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const BACKUP_DIR = path.join(__dirname, 'backups');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@rajmukhi.education';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1234';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const USING_DEFAULT_ADMIN_CREDENTIALS = !process.env.ADMIN_EMAIL && !process.env.ADMIN_PASSWORD;
+const REQUEST_TIMEOUT_MS = 30 * 1000;
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT = 25;
+const rateBuckets = new Map();
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 const defaultDB = { users: [], students: [], courses: [], lessons: [], enrollments: [], progress: [], notes: [], notices: [], videos: [], tests: [], results: [], sessions: [], uploads: [], certificates: [], security_events: [], twofa_challenges: [], security_alerts: [] };
 function loadDB(){try{if(!fs.existsSync(DB_FILE)){fs.writeFileSync(DB_FILE,JSON.stringify(defaultDB,null,2));return structuredClone(defaultDB)}const d=JSON.parse(fs.readFileSync(DB_FILE,'utf8'));return {...defaultDB,...d,users:d.users||[],sessions:d.sessions||[],videos:d.videos||[],uploads:d.uploads||[],lessons:d.lessons||[],enrollments:d.enrollments||[],progress:d.progress||[],certificates:d.certificates||[],security_events:d.security_events||[],twofa_challenges:d.twofa_challenges||[],security_alerts:d.security_alerts||[]}}catch{return structuredClone(defaultDB)}}
 let db=loadDB();
-function saveDB(){fs.writeFileSync(DB_FILE,JSON.stringify(db,null,2))}
+function saveDB(){
+ const tmp=DB_FILE+'.tmp';
+ const payload=JSON.stringify(db,null,2);
+ fs.writeFileSync(tmp,payload,{encoding:'utf8',mode:0o600});
+ fs.renameSync(tmp,DB_FILE);
+}
+
+const BACKUP_RETENTION = Math.max(3, Number(process.env.BACKUP_RETENTION || 14));
+const BACKUP_INTERVAL_MS = Math.max(6 * 60 * 60 * 1000, Number(process.env.BACKUP_INTERVAL_MS || 24 * 60 * 60 * 1000));
+function backupChecksum(payload){return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex')}
+function verifyAutomaticBackupFile(filePath){
+  try{
+    const payload=JSON.parse(fs.readFileSync(filePath,'utf8'));
+    if(payload.format!=='rajmukhi-education-backup-v2'||!payload.database)return {ok:false,error:'Invalid backup format'};
+    const {checksum,...withoutChecksum}=payload;
+    const expected=backupChecksum(withoutChecksum);
+    return {ok:checksum===expected,file:path.basename(filePath),checksum:checksum||null,expected_checksum:expected,created_at:payload.created_at||null};
+  }catch(e){return {ok:false,file:path.basename(filePath),error:String(e.message||e)}}
+}
+function verifyBackupSet(){
+  let files=[];
+  try{files=fs.readdirSync(BACKUP_DIR).filter(n=>n.startsWith('rajmukhi-auto-')&&n.endsWith('.json')).sort().reverse()}catch{}
+  const results=files.map(n=>verifyAutomaticBackupFile(path.join(BACKUP_DIR,n)));
+  return {total:results.length,valid:results.filter(x=>x.ok).length,invalid:results.filter(x=>!x.ok).length,results};
+}
+function createAutomaticBackup(){
+  try{
+    const payload={format:'rajmukhi-education-backup-v2',created_at:new Date().toISOString(),database:db,uploads:fs.existsSync(UPLOAD_DIR)?fs.readdirSync(UPLOAD_DIR).filter(n=>fs.statSync(path.join(UPLOAD_DIR,n)).isFile()).map(name=>{const file=path.join(UPLOAD_DIR,name);return {name,data:fs.readFileSync(file).toString('base64')}}):[]};
+    const checksum=backupChecksum(payload);
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+    const out=path.join(BACKUP_DIR,`rajmukhi-auto-${stamp}.json`);
+    const tmp=out+'.tmp';
+    fs.writeFileSync(tmp,JSON.stringify({...payload,checksum},null,2));
+    fs.renameSync(tmp,out);
+    const files=fs.readdirSync(BACKUP_DIR).filter(n=>n.startsWith('rajmukhi-auto-')&&n.endsWith('.json')).sort().reverse();
+    for(const old of files.slice(BACKUP_RETENTION))try{fs.unlinkSync(path.join(BACKUP_DIR,old))}catch{}
+    return {file:path.basename(out),checksum,retained:Math.min(files.length,BACKUP_RETENTION)};
+  }catch(e){return {error:String(e.message||e)}}
+}
 function id(){return crypto.randomUUID()}
 function hash(v){return crypto.createHash('sha256').update(String(v)).digest('hex')}
 function certificateHash(c){return hash([c.certificate_no,c.student_name,c.course_title,c.issued_at].join('|')).slice(0,24).toUpperCase()}
@@ -26,7 +73,31 @@ function addSecurityAlert(user_id,type,details={}){db.security_alerts.push({id:i
 
 function createSession(u,meta={}){const token=crypto.randomBytes(32).toString('hex');db.sessions.push({token,user_id:u.id,role:u.role,device_id:meta.device_id||'unknown',device_label:meta.device_label||'Unknown device',created_at:new Date().toISOString(),expires_at:new Date(Date.now()+7*86400000).toISOString()});return token}
 
-function send(res,status,data,headers={}){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type, Authorization','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS',...headers});res.end(JSON.stringify(data))}
+function send(res,status,data,headers={}){
+ const base={'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type, Authorization, X-Device-ID','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','X-Content-Type-Options':'nosniff','X-Frame-Options':'SAMEORIGIN','Referrer-Policy':'strict-origin-when-cross-origin','Cache-Control':'no-store'};
+ if(IS_PRODUCTION)base['Strict-Transport-Security']='max-age=31536000; includeSubDomains';
+ res.writeHead(status,{...base,...headers});res.end(JSON.stringify(data))
+}
+function clientIp(req){return String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim()}
+function rateLimited(req,key){
+ const now=Date.now(), bucketKey=key+':'+clientIp(req), arr=(rateBuckets.get(bucketKey)||[]).filter(t=>now-t<RATE_WINDOW_MS);
+ arr.push(now);rateBuckets.set(bucketKey,arr);
+ if(rateBuckets.size>5000){for(const [k,v] of rateBuckets)if(!v.some(t=>now-t<RATE_WINDOW_MS))rateBuckets.delete(k)}
+ return arr.length>RATE_LIMIT
+}
+function requestId(){return crypto.randomBytes(8).toString('hex')}
+function cleanupExpiredData(){
+ const now=new Date();
+ const beforeSessions=db.sessions.length;
+ db.sessions=db.sessions.filter(x=>new Date(x.expires_at)>now);
+ db.twofa_challenges=db.twofa_challenges.filter(x=>new Date(x.expires_at)>now);
+ if(db.sessions.length!==beforeSessions) saveDB();
+}
+function serveFile(res,filePath,contentType){
+ if(!fs.existsSync(filePath))return send(res,404,{error:'Not found'});
+ res.writeHead(200,{'Content-Type':contentType,'X-Content-Type-Options':'nosniff','X-Frame-Options':'SAMEORIGIN','Referrer-Policy':'strict-origin-when-cross-origin'});
+ return fs.createReadStream(filePath).pipe(res)
+}
 
 function parseMultipart(req,body){
  const ct=req.headers['content-type']||''; const m=ct.match(/boundary=(?:"([^"]+)"|([^;]+))/); if(!m)return null;
@@ -34,7 +105,7 @@ function parseMultipart(req,body){
  for(const part of parts){let x=part.replace(/^\r\n/,'').replace(/\r\n--$/,'');const idx=x.indexOf('\r\n\r\n');if(idx<0)continue;const head=x.slice(0,idx),data=x.slice(idx+4);const nm=(head.match(/name="([^"]+)"/)||[])[1];const fn=(head.match(/filename="([^"]*)"/)||[])[1];out.push({name:nm,filename:fn,headers:head,data})} return out;
 }
 
-function readBody(req){return new Promise((resolve,reject)=>{let b='';req.on('data',c=>{b+=c;if(b.length>10_000_000) req.destroy()});req.on('end',()=>{try{resolve(b?JSON.parse(b):{})}catch{reject(new Error('invalid JSON'))}});req.on('error',reject)})}
+function readBody(req){return new Promise((resolve,reject)=>{let b='',tooLarge=false;req.on('data',c=>{if(tooLarge)return;b+=c;if(b.length>10_000_000){tooLarge=true;reject(Object.assign(new Error('request body too large'),{code:'BODY_TOO_LARGE'}));req.destroy()}});req.on('end',()=>{if(tooLarge)return;try{resolve(b?JSON.parse(b):{})}catch{reject(new Error('invalid JSON'))}});req.on('error',err=>{if(!tooLarge)reject(err)})})}
 function route(req){const u=new URL(req.url,`http://${req.headers.host||'localhost'}`);return {path:u.pathname,query:u.searchParams}}
 function tokenFrom(req){return (req.headers.authorization||'').replace(/^Bearer\s+/i,'')}
 function auth(req){const t=tokenFrom(req);return db.sessions.find(s=>s.token===t&&new Date(s.expires_at)>new Date())||null}
@@ -43,12 +114,39 @@ function requireUser(req,res){const s=auth(req);if(!s){send(res,401,{error:'auth
 function safeUser(u){return {id:u.id,name:u.name,email:u.email,role:u.role,created_at:u.created_at}}
 function seed(){if(!db.courses.length)db.courses=[{id:'course-science',title:'General Science',description:'Physics, Chemistry, Biology और सामान्य विज्ञान',lessons:100,created_at:new Date().toISOString()},{id:'course-math',title:'Mathematics',description:'Basic से Advanced Mathematics',lessons:80,created_at:new Date().toISOString()},{id:'course-reasoning',title:'Reasoning',description:'Verbal और Non-Verbal Reasoning',lessons:65,created_at:new Date().toISOString()}];if(!db.lessons.length)db.lessons=[{id:'lesson-science-1',course_id:'course-science',title:'Introduction to General Science',description:'विज्ञान की मूल अवधारणाएँ',content:'यह lesson विज्ञान की मूल अवधारणाओं से शुरू होता है।',order:1},{id:'lesson-math-1',course_id:'course-math',title:'Number System Basics',description:'संख्या पद्धति की शुरुआत',content:'Natural, whole और integer numbers का परिचय।',order:1}];if(!db.notes.length)db.notes=[{id:'note-science',title:'General Science Notes',description:'Study material',file_url:'',created_at:new Date().toISOString()}];if(!db.notices.length)db.notices=[{id:'notice-welcome',title:'Welcome',message:'Rajmukhi Education में आपका स्वागत है।',created_at:new Date().toISOString()}];if(!db.tests.length)db.tests=[{id:'test-gs-1',title:'General Science Quiz',course_id:'course-science',questions:[{id:1,question:'भारत की राजधानी क्या है?',options:['पटना','नई दिल्ली','मुंबई'],answer:1},{id:2,question:'पानी का रासायनिक सूत्र क्या है?',options:['H₂O','CO₂','O₂'],answer:0}],created_at:new Date().toISOString()}];saveDB()}
 seed();
-const server=http.createServer(async(req,res)=>{if(req.method==='OPTIONS')return send(res,204,{});const {path:p,query}=route(req);
-if(req.method==='GET'&&p==='/api/health')return send(res,200,{ok:true,app:'Rajmukhi Education',version:'v40-final',database:'persistent-json',features:['auth','uploads','student-dashboard','certificate-generation','certificate-verification','professional-certificate','student-profile','account-security','totp-2fa','otp-login-challenge','trusted-devices','recovery-codes','security-alerts-v35','session-revoke-per-device','session-labeling','personal-data-export','security-center-v36','privacy-controls-v37','admin-security-audit-v38','audit-filtering','audit-export','privacy-aware-public-profile','shareable-profile','achievements','final-release']});
+const server=http.createServer(async(req,res)=>{
+ const rid=requestId();
+ res.setHeader('X-Request-ID',rid);
+ req.setTimeout(REQUEST_TIMEOUT_MS,()=>{if(!res.headersSent){send(res,408,{error:'request timeout',request_id:rid})}req.destroy()});
+if(req.method==='OPTIONS')return send(res,204,{});const {path:p,query}=route(req);
+if(req.method==='GET'&&p==='/api/health')return send(res,200,{ok:true,app:'Rajmukhi Education',version:APP_VERSION,database:'persistent-json',features:['auth','uploads','student-dashboard','certificate-generation','certificate-verification','professional-certificate','student-profile','account-security','totp-2fa','otp-login-challenge','trusted-devices','recovery-codes','security-alerts-v35','session-revoke-per-device','session-labeling','personal-data-export','security-center-v36','privacy-controls-v37','admin-security-audit-v38','audit-filtering','audit-export','privacy-aware-public-profile','shareable-profile','achievements','final-release']});
+if(req.method==='GET'&&p==='/api/ready'){
+ let dbWritable=false, uploadsWritable=false;
+ try{fs.accessSync(path.dirname(DB_FILE),fs.constants.W_OK);dbWritable=true}catch{}
+ try{fs.accessSync(UPLOAD_DIR,fs.constants.W_OK);uploadsWritable=true}catch{}
+ const checks={
+   database:Array.isArray(db.users)&&Array.isArray(db.courses)&&Array.isArray(db.lessons),
+   db_directory_writable:dbWritable,
+   uploads:fs.existsSync(UPLOAD_DIR),
+   uploads_writable:uploadsWritable
+ };
+ const ready=Object.values(checks).every(Boolean);
+ return send(res,ready?200:503,{ok:ready,app:'Rajmukhi Education',version:APP_VERSION,checks});
+}
+if(req.method==='GET'&&p==='/api/admin/backups/verify'){if(!requireAdmin(req,res))return;return send(res,200,{ok:true,...verifyBackupSet()});}
+if(req.method==='GET'&&p==='/api/version')return send(res,200,{app:'Rajmukhi Education',version:APP_VERSION,node:process.version,environment:process.env.NODE_ENV||'development'});
+if(req.method==='GET'&&p==='/api/admin/diagnostics'){
+ if(!requireAdmin(req,res))return;
+ let dbBytes=0;
+ try{dbBytes=fs.statSync(DB_FILE).size}catch{}
+ let backupCount=0,lastBackup=null;
+ try{const files=fs.readdirSync(BACKUP_DIR).filter(x=>x.endsWith('.json'));backupCount=files.length;lastBackup=files.sort().slice(-1)[0]||null}catch{}
+ return send(res,200,{ok:true,version:APP_VERSION,uptime_seconds:Math.round(process.uptime()),memory:process.memoryUsage(),database:{file:DB_FILE,size_bytes:dbBytes,counts:Object.fromEntries(Object.entries(db).map(([k,v])=>[k,Array.isArray(v)?v.length:0]))},uploads:{directory:UPLOAD_DIR,count:db.uploads.length},backups:{directory:BACKUP_DIR,count:backupCount,last_backup:lastBackup,integrity:verifyBackupSet()}});
+}
 if(req.method==='GET'&&p==='/api/stats')return send(res,200,{students:db.students.length,courses:db.courses.length,notes:db.notes.length,tests:db.tests.length,testAttempts:db.results.length,users:db.users.length});
-if(req.method==='POST'&&p==='/api/auth/register'){try{const b=await readBody(req);if(!b.name||!b.email||!b.password)return send(res,400,{error:'name, email and password are required'});if(db.users.some(u=>u.email.toLowerCase()===String(b.email).toLowerCase()))return send(res,409,{error:'email already registered'});const u={id:id(),name:String(b.name).trim(),email:String(b.email).trim(),password_hash:hash(b.password),role:'student',created_at:new Date().toISOString()};db.users.push(u);db.students.push({id:u.id,name:u.name,email:u.email,created_at:u.created_at});const token=crypto.randomBytes(32).toString('hex');db.sessions.push({token,user_id:u.id,role:u.role,created_at:new Date().toISOString(),expires_at:new Date(Date.now()+7*86400000).toISOString()});saveDB();return send(res,201,{token,user:safeUser(u)})}catch{return send(res,400,{error:'invalid JSON'})}}
-if(req.method==='POST'&&p==='/api/auth/login'){try{const b=await readBody(req);let u;if(String(b.email).toLowerCase()===ADMIN_EMAIL.toLowerCase()&&String(b.password)===ADMIN_PASSWORD){u={id:'admin',name:'Rajmukhi Admin',email:ADMIN_EMAIL,role:'admin'}}else{u=db.users.find(x=>x.email.toLowerCase()===String(b.email||'').toLowerCase()&&x.password_hash===hash(b.password||''));if(!u)return send(res,401,{error:'invalid credentials'})}if(u.two_factor_enabled&&u.two_factor_secret){const challenge=crypto.randomBytes(32).toString('hex');db.twofa_challenges.push({challenge,user_id:u.id,created_at:new Date().toISOString(),expires_at:new Date(Date.now()+5*60000).toISOString()});db.security_events.push({id:id(),user_id:u.id,type:'2fa_login_challenge',created_at:new Date().toISOString()});saveDB();return send(res,202,{requires_2fa:true,challenge,message:'Enter the 6-digit authenticator code to continue'})}const token=createSession(u,{device_id:deviceIdFrom(req,b),device_label:b.device_label||'Web browser'});addSecurityAlert(u.id,'new_login',{device_label:b.device_label||'Web browser'});saveDB();return send(res,200,{token,user:safeUser(u)})}catch{return send(res,400,{error:'invalid JSON'})}}
-if(req.method==='POST'&&p==='/api/auth/2fa/verify'){try{const b=await readBody(req);const c=db.twofa_challenges.find(x=>x.challenge===b.challenge&&new Date(x.expires_at)>new Date());if(!c)return send(res,401,{error:'invalid or expired 2FA challenge'});const u=db.users.find(x=>x.id===c.user_id);if(!u||!u.two_factor_secret)return send(res,401,{error:'invalid authenticator code'});
+if(req.method==='POST'&&p==='/api/auth/register'){if(rateLimited(req,'register'))return send(res,429,{error:'too many registration attempts; try again later'});try{const b=await readBody(req);if(!b.name||!b.email||!b.password)return send(res,400,{error:'name, email and password are required'});if(db.users.some(u=>u.email.toLowerCase()===String(b.email).toLowerCase()))return send(res,409,{error:'email already registered'});const u={id:id(),name:String(b.name).trim(),email:String(b.email).trim(),password_hash:hash(b.password),role:'student',created_at:new Date().toISOString()};db.users.push(u);db.students.push({id:u.id,name:u.name,email:u.email,created_at:u.created_at});const token=crypto.randomBytes(32).toString('hex');db.sessions.push({token,user_id:u.id,role:u.role,created_at:new Date().toISOString(),expires_at:new Date(Date.now()+7*86400000).toISOString()});saveDB();return send(res,201,{token,user:safeUser(u)})}catch{return send(res,400,{error:'invalid JSON'})}}
+if(req.method==='POST'&&p==='/api/auth/login'){if(rateLimited(req,'login'))return send(res,429,{error:'too many login attempts; try again later'});try{const b=await readBody(req);let u;if(String(b.email).toLowerCase()===ADMIN_EMAIL.toLowerCase()&&String(b.password)===ADMIN_PASSWORD){u={id:'admin',name:'Rajmukhi Admin',email:ADMIN_EMAIL,role:'admin'}}else{u=db.users.find(x=>x.email.toLowerCase()===String(b.email||'').toLowerCase()&&x.password_hash===hash(b.password||''));if(!u)return send(res,401,{error:'invalid credentials'})}if(u.two_factor_enabled&&u.two_factor_secret){const challenge=crypto.randomBytes(32).toString('hex');db.twofa_challenges.push({challenge,user_id:u.id,created_at:new Date().toISOString(),expires_at:new Date(Date.now()+5*60000).toISOString()});db.security_events.push({id:id(),user_id:u.id,type:'2fa_login_challenge',created_at:new Date().toISOString()});saveDB();return send(res,202,{requires_2fa:true,challenge,message:'Enter the 6-digit authenticator code to continue'})}const token=createSession(u,{device_id:deviceIdFrom(req,b),device_label:b.device_label||'Web browser'});addSecurityAlert(u.id,'new_login',{device_label:b.device_label||'Web browser'});saveDB();return send(res,200,{token,user:safeUser(u)})}catch{return send(res,400,{error:'invalid JSON'})}}
+if(req.method==='POST'&&p==='/api/auth/2fa/verify'){if(rateLimited(req,'2fa'))return send(res,429,{error:'too many 2FA attempts; try again later'});try{const b=await readBody(req);const c=db.twofa_challenges.find(x=>x.challenge===b.challenge&&new Date(x.expires_at)>new Date());if(!c)return send(res,401,{error:'invalid or expired 2FA challenge'});const u=db.users.find(x=>x.id===c.user_id);if(!u||!u.two_factor_secret)return send(res,401,{error:'invalid authenticator code'});
 let usedRecovery=false;
 if(!verifyTotp(u.two_factor_secret,b.code)){
  const rc=String(b.code||'').trim().toUpperCase();
@@ -107,6 +205,22 @@ if(req.method==='GET'&&p==='/api/dashboard/student'){const s=requireUser(req,res
 if(req.method==='GET'&&p==='/api/admin/security-audit'){if(!requireAdmin(req,res))return;const type=String(query.get('type')||'').trim();const userId=String(query.get('user_id')||'').trim();const q=String(query.get('q')||'').toLowerCase();const limit=Math.min(Math.max(Number(query.get('limit')||200),1),1000);let events=[...db.security_events].filter(e=>(!type||e.type===type)&&(!userId||e.user_id===userId)&&(!q||JSON.stringify(e).toLowerCase().includes(q))).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,limit);let alerts=[...db.security_alerts].filter(e=>(!userId||e.user_id===userId)&&(!q||JSON.stringify(e).toLowerCase().includes(q))).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,limit);const counts={};for(const e of events)counts[e.type]=(counts[e.type]||0)+1;return send(res,200,{summary:{events:events.length,alerts:alerts.length,users:db.users.length,active_sessions:db.sessions.filter(x=>new Date(x.expires_at)>new Date()).length},filters:{type,user_id:userId,q,limit},event_counts:counts,events,alerts})}
 if(req.method==='GET'&&p==='/api/admin/security-audit/export'){if(!requireAdmin(req,res))return;const type=String(query.get('type')||'').trim();const userId=String(query.get('user_id')||'').trim();const rows=[...db.security_events].filter(e=>(!type||e.type===type)&&(!userId||e.user_id===userId)).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));const esc=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const csv=['id,user_id,type,created_at,details',...rows.map(e=>[e.id,e.user_id,e.type,e.created_at,JSON.stringify(e.details||{})].map(esc).join(','))].join('\n');res.writeHead(200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="rajmukhi-security-audit-v38.csv"'});return res.end(csv)}
 if(req.method==='GET'&&p.match(/^\/api\/profile\/public\/[^/]+$/)){const idv=decodeURIComponent(p.split('/').pop());const u=db.users.find(x=>x.id===idv);if(!u)return send(res,404,{error:'profile not found'});const visibility=u.profile_visibility||'private';if(visibility==='private')return send(res,403,{error:'profile is private'});const isStudent=!!(auth(req)?.role==='student');if(visibility==='students'&&!isStudent)return send(res,403,{error:'profile visible to students only'});const courses=db.enrollments.filter(e=>e.user_id===u.id).map(e=>{const c=db.courses.find(x=>x.id===e.course_id);return c?{id:c.id,title:c.title}:null}).filter(Boolean);return send(res,200,{profile:{id:u.id,name:u.name,avatar_url:u.avatar_url||null,email:u.show_email!==false?u.email:undefined,created_at:u.created_at},courses})}
+if(req.method==='GET'&&p==='/api/admin/integrity'){
+ if(!requireAdmin(req,res))return;
+ const checks={
+  users:Array.isArray(db.users),students:Array.isArray(db.students),courses:Array.isArray(db.courses),lessons:Array.isArray(db.lessons),
+  enrollments:Array.isArray(db.enrollments),progress:Array.isArray(db.progress),results:Array.isArray(db.results),certificates:Array.isArray(db.certificates),
+  sessions:Array.isArray(db.sessions),security_events:Array.isArray(db.security_events),security_alerts:Array.isArray(db.security_alerts)
+ };
+ const orphaned={
+  enrollments:db.enrollments.filter(x=>!db.users.some(u=>u.id===x.user_id)||!db.courses.some(c=>c.id===x.course_id)).length,
+  progress:db.progress.filter(x=>!db.users.some(u=>u.id===x.user_id)||!db.lessons.some(l=>l.id===x.lesson_id)).length,
+  results:db.results.filter(x=>!db.users.some(u=>u.id===x.student_id)||!db.tests.some(t=>t.id===x.test_id)).length,
+  certificates:db.certificates.filter(x=>!db.users.some(u=>u.id===x.user_id)||!db.courses.some(c=>c.id===x.course_id)).length
+ };
+ const healthy=Object.values(checks).every(Boolean)&&Object.values(orphaned).every(v=>v===0);
+ return send(res,healthy?200:200,{ok:healthy,checks,orphaned,counts:{users:db.users.length,students:db.students.length,courses:db.courses.length,lessons:db.lessons.length,enrollments:db.enrollments.length,progress:db.progress.length,results:db.results.length,certificates:db.certificates.length}});
+}
 if(req.method==='GET'&&p==='/api/admin/dashboard'){if(!requireAdmin(req,res))return;const recentResults=[...db.results].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,10);return send(res,200,{students:db.students.length,courses:db.courses.length,lessons:db.lessons.length,notes:db.notes.length,videos:db.videos.length,tests:db.tests.length,attempts:db.results.length,uploads:db.uploads.length,recentResults})}
 if(req.method==='GET'&&p==='/api/admin/content'){if(!requireAdmin(req,res))return;const content=[...db.notes.map(x=>({...x,type:'notes'})),...db.videos.map(x=>({...x,type:'videos'})),...db.notices.map(x=>({...x,type:'notices'}))];return send(res,200,{content})}
 if(req.method==='DELETE'&&p.startsWith('/api/admin/content/')){if(!requireAdmin(req,res))return;const parts=p.split('/');const type=parts[3],itemId=parts[4];const map={courses:'courses',notes:'notes',videos:'videos',notices:'notices',tests:'tests',lessons:'lessons'};const key=map[type];if(!key)return send(res,400,{error:'unsupported content type'});const idx=db[key].findIndex(x=>x.id===itemId);if(idx<0)return send(res,404,{error:'content not found'});db[key].splice(idx,1);saveDB();return send(res,200,{ok:true,deleted:itemId})}
@@ -127,7 +241,7 @@ if(req.method==='GET'&&p==='/api/profile/activity'){const s=requireUser(req,res)
 if(req.method==='PUT'&&p==='/api/profile/avatar'){const s=requireUser(req,res);if(!s)return;const b=await readBody(req);const data=String(b.data_url||'');if(!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(data))return send(res,400,{error:'valid image data required'});if(data.length>700000)return send(res,413,{error:'image too large'});const u=db.users.find(x=>x.id===s.user_id);if(!u)return send(res,404,{error:'user not found'});u.avatar_url=data;saveDB();return send(res,200,{avatar_url:data})}
 if(req.method==='DELETE'&&p==='/api/profile/avatar'){const s=requireUser(req,res);if(!s)return;const u=db.users.find(x=>x.id===s.user_id);if(u){delete u.avatar_url;saveDB()}return send(res,200,{ok:true})}
 
-if(req.method==='GET'&&p.startsWith('/api/public/profile/')){const sid=decodeURIComponent(p.split('/').pop());const u=db.users.find(x=>x.id===sid)||db.students.find(x=>x.id===sid);if(!u)return send(res,404,{error:'profile not found'});const visibility=u.profile_visibility||'private';if(visibility==='private')return send(res,403,{error:'profile is private'});const enrollments=db.enrollments.filter(x=>x.user_id===sid);const progress=db.progress.filter(x=>x.user_id===sid);const results=db.results.filter(x=>x.student_id===sid||x.user_id===sid);const certs=db.certificates.filter(x=>x.user_id===sid||x.student_id===sid);const completed=progress.filter(x=>x.completed).length;const avg=results.length?Math.round(results.reduce((a,x)=>a+(Number(x.score||0)/(Number(x.total)||1))*100,0)/results.length)+'%':'—';const achievements=[];if(enrollments.length>=1)achievements.push('Course Explorer');if(completed>=1)achievements.push('First Lesson Completed');if(completed>=10)achievements.push('10 Lessons Completed');if(certs.length>=1)achievements.push('Certified Learner');return send(res,200,{profile:{id:u.id,name:u.name,email:u.email,show_email:u.show_email!==false,avatar_url:u.avatar_url||null,profile_visibility:visibility},stats:{enrollments:enrollments.length,completed_lessons:completed,certificates:certs.length,average_score:avg},achievements,certificates:certs.map(c=>({id:c.id,certificate_number:c.certificate_number,title:c.title,course_name:c.course_name,issue_date:c.issue_date,status:c.status}))})}
+if(req.method==='GET'&&p.startsWith('/api/public/profile/')){const sid=decodeURIComponent(p.split('/').pop());const u=db.users.find(x=>x.id===sid)||db.students.find(x=>x.id===sid);if(!u)return send(res,404,{error:'profile not found'});const visibility=u.profile_visibility||'private';if(visibility==='private')return send(res,403,{error:'profile is private'});const enrollments=db.enrollments.filter(x=>x.user_id===sid);const progress=db.progress.filter(x=>x.user_id===sid);const results=db.results.filter(x=>x.student_id===sid||x.user_id===sid);const certs=db.certificates.filter(x=>x.user_id===sid||x.student_id===sid);const completed=progress.filter(x=>x.completed).length;const avg=results.length?Math.round(results.reduce((a,x)=>a+(Number(x.score||0)/(Number(x.total)||1))*100,0)/results.length)+'%':'—';const achievements=[];if(enrollments.length>=1)achievements.push('Course Explorer');if(completed>=1)achievements.push('First Lesson Completed');if(completed>=10)achievements.push('10 Lessons Completed');if(certs.length>=1)achievements.push('Certified Learner');return send(res,200,{profile:{id:u.id,name:u.name,email:u.show_email===true?u.email:undefined,show_email:u.show_email===true,avatar_url:u.avatar_url||null,profile_visibility:visibility},stats:{enrollments:enrollments.length,completed_lessons:completed,certificates:certs.length,average_score:avg},achievements,certificates:certs.map(c=>({id:c.id,certificate_number:c.certificate_no,title:c.course_title,course_name:c.course_title,issue_date:c.issued_at,status:c.status||'active'}))})}
 
 if(req.method==='GET'&&p==='/api/profile/privacy'){const s=requireUser(req,res);if(!s)return;const u=db.users.find(x=>x.id===s.user_id)||{};return send(res,200,{profile_visibility:u.profile_visibility||'private',show_email:u.show_email!==false,marketing_notifications:u.marketing_notifications!==false,learning_reminders:u.learning_reminders!==false,certificate_updates:u.certificate_updates!==false})}
 if(req.method==='PUT'&&p==='/api/profile/privacy'){const s=requireUser(req,res);if(!s)return;const u=db.users.find(x=>x.id===s.user_id);if(!u)return send(res,404,{error:'user not found'});const b=await readBody(req);if(b.profile_visibility!==undefined&&!['private','students','public'].includes(b.profile_visibility))return send(res,400,{error:'invalid profile visibility'});if(b.profile_visibility!==undefined)u.profile_visibility=b.profile_visibility;for(const k of ['show_email','marketing_notifications','learning_reminders','certificate_updates'])if(b[k]!==undefined)u[k]=!!b[k];db.security_events.push({id:id(),user_id:s.user_id,type:'privacy_settings_updated',created_at:new Date().toISOString()});saveDB();return send(res,200,{ok:true,privacy:{profile_visibility:u.profile_visibility||'private',show_email:u.show_email!==false,marketing_notifications:u.marketing_notifications!==false,learning_reminders:u.learning_reminders!==false,certificate_updates:u.certificate_updates!==false}})}
@@ -140,12 +254,31 @@ if(req.method==='GET'&&p==='/api/profile/recovery-codes'){const s=requireUser(re
 if(req.method==='POST'&&p==='/api/profile/recovery-codes/regenerate'){const s=requireUser(req,res);if(!s)return;const u=db.users.find(x=>x.id===s.user_id);if(!u?.two_factor_enabled||!u.two_factor_secret)return send(res,400,{error:'2FA must be enabled'});const b=await readBody(req);if(!verifyTotp(u.two_factor_secret,b.code))return send(res,400,{error:'valid authenticator code required'});u.recovery_codes=generateRecoveryCodes();db.security_events.push({id:id(),user_id:s.user_id,type:'recovery_codes_regenerated',created_at:new Date().toISOString()});saveDB();return send(res,200,{recovery_codes:u.recovery_codes})}
 if(req.method==='PUT'&&p.startsWith('/api/profile/sessions/')){const s=requireUser(req,res);if(!s)return;const token=decodeURIComponent(p.split('/').pop());const session=db.sessions.find(x=>x.token===token&&x.user_id===s.user_id);if(!session)return send(res,404,{error:'session not found'});const b=await readBody(req);session.device_label=String(b.device_label||'').trim().slice(0,80)||session.device_label;saveDB();return send(res,200,{ok:true,device_label:session.device_label})}
 if(req.method==='DELETE'&&p.startsWith('/api/profile/sessions/')){const s=requireUser(req,res);if(!s)return;const token=decodeURIComponent(p.split('/').pop());if(token===s.token)return send(res,400,{error:'use logout for current session'});const before=db.sessions.length;db.sessions=db.sessions.filter(x=>!(x.token===token&&x.user_id===s.user_id));if(db.sessions.length===before)return send(res,404,{error:'session not found'});db.security_events.push({id:id(),user_id:s.user_id,type:'session_revoked',created_at:new Date().toISOString()});saveDB();return send(res,200,{ok:true})}
-if(req.method==='GET'&&p==='/public-profile'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'public_profile_v39.html')).pipe(res)}
-if(req.method==='GET'&&p==='/security'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'security_v37.html')).pipe(res)}
-if(req.method==='GET'&&p==='/settings'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'settings_v32.html')).pipe(res)}
-if(req.method==='GET'&&p==='/profile'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'profile_v31.html')).pipe(res)}
-if(req.method==='GET'&&p==='/admin'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'admin_v38.html')).pipe(res)}
+if(req.method==='GET'&&p==='/'){
+ return serveFile(res,path.join(__dirname,'index.html'),'text/html; charset=utf-8')
+}
+if(req.method==='GET'&&p==='/manifest.json'){
+ return serveFile(res,path.join(__dirname,'manifest.json'),'application/manifest+json; charset=utf-8')
+}
+if(req.method==='GET'&&p==='/sw.js'){
+ return serveFile(res,path.join(__dirname,'sw.js'),'application/javascript; charset=utf-8')
+}
+if(req.method==='GET'&&p==='/public-profile')return serveFile(res,path.join(__dirname,'public_profile_v39.html'),'text/html; charset=utf-8')
+if(req.method==='GET'&&p==='/security')return serveFile(res,path.join(__dirname,'security_v37.html'),'text/html; charset=utf-8')
+if(req.method==='GET'&&p==='/settings')return serveFile(res,path.join(__dirname,'settings_v32.html'),'text/html; charset=utf-8')
+if(req.method==='GET'&&p==='/profile')return serveFile(res,path.join(__dirname,'profile_v31.html'),'text/html; charset=utf-8')
+if(req.method==='GET'&&p==='/admin')return serveFile(res,path.join(__dirname,'admin_v38.html'),'text/html; charset=utf-8')
 if(req.method==='GET'&&(p==='/admin-v25.css'||p==='/admin-v24.css'||p==='/admin-v22.css')){res.writeHead(200,{'Content-Type':'text/css; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'admin-v25.css')).pipe(res)}
 if(req.method==='GET'&&(p==='/admin-v25.js'||p==='/admin-v24.js'||p==='/admin-v22.js')){res.writeHead(200,{'Content-Type':'application/javascript; charset=utf-8'});return fs.createReadStream(path.join(__dirname,'admin-v25.js')).pipe(res)}
 send(res,404,{error:'Not found'})});
-server.listen(PORT,()=>console.log(`Rajmukhi Education v40 Final API running on http://localhost:${PORT}`));
+const cleanupTimer=setInterval(cleanupExpiredData, 15*60*1000);
+const automaticBackupTimer=setInterval(createAutomaticBackup, BACKUP_INTERVAL_MS);
+const initialBackup=createAutomaticBackup();
+if(initialBackup.error) console.warn('Automatic backup warning:',initialBackup.error);
+if (IS_PRODUCTION && USING_DEFAULT_ADMIN_CREDENTIALS) console.warn('WARNING: ADMIN_EMAIL/ADMIN_PASSWORD are not set; configure production admin credentials before public deployment.');
+if(cleanupTimer.unref) cleanupTimer.unref();
+server.listen(PORT,()=>console.log(`Rajmukhi Education ${APP_VERSION} running on port ${PORT}`));
+function shutdown(signal){
+ clearInterval(cleanupTimer);console.log(`${signal} received, shutting down...`);server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10000).unref()}
+process.on('SIGTERM',()=>shutdown('SIGTERM'));
+process.on('SIGINT',()=>shutdown('SIGINT'));

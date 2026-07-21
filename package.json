@@ -1,8 +1,12 @@
 {
   "name": "rajmukhi-education-production-final",
-  "version": "40.1.0",
+  "version": "51.0.0",
   "private": true,
   "scripts": {
-    "start": "node server.js"
-  }
+    "start": "node server.js",
+    "backup": "node backup.js",
+    "restore": "node restore.js",
+    "verify-backup": "node verify-backup.js"
+  },
+  "description": "Rajmukhi Education final production candidate with authentication, learning, testing, certificates, admin controls, backup and integrity verification"
 }

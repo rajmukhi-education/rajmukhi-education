@@ -1,6 +1,6 @@
 {
   "name": "rajmukhi-education-production-final",
-  "version": "52.0.0",
+  "version": "53.0.0",
   "private": true,
   "scripts": {
     "start": "node server.js",

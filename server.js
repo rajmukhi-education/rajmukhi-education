@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = 'v50-production';
+const APP_VERSION = 'v53-production';
 const DB_FILE = path.join(__dirname, 'data.json');
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const BACKUP_DIR = path.join(__dirname, 'backups');
@@ -20,12 +20,41 @@ if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 const defaultDB = { users: [], students: [], courses: [], lessons: [], enrollments: [], progress: [], notes: [], notices: [], videos: [], tests: [], results: [], sessions: [], uploads: [], certificates: [], security_events: [], twofa_challenges: [], security_alerts: [] };
 function loadDB(){try{if(!fs.existsSync(DB_FILE)){fs.writeFileSync(DB_FILE,JSON.stringify(defaultDB,null,2));return structuredClone(defaultDB)}const d=JSON.parse(fs.readFileSync(DB_FILE,'utf8'));return {...defaultDB,...d,users:d.users||[],sessions:d.sessions||[],videos:d.videos||[],uploads:d.uploads||[],lessons:d.lessons||[],enrollments:d.enrollments||[],progress:d.progress||[],certificates:d.certificates||[],security_events:d.security_events||[],twofa_challenges:d.twofa_challenges||[],security_alerts:d.security_alerts||[]}}catch{return structuredClone(defaultDB)}}
 let db=loadDB();
+// V53: ensure the initial educational catalog is available even if a previous
+// runtime deployment created an empty data.json. Existing user/content data is
+// preserved; only missing starter catalog entries are restored.
+function ensureStarterCatalog(){
+ const courses=[
+  {id:'course-science',title:'General Science',description:'Physics, Chemistry, Biology और सामान्य विज्ञान',lessons:100,created_at:'2026-07-20T00:00:00.000Z'},
+  {id:'course-math',title:'Mathematics',description:'Basic से Advanced Mathematics',lessons:80,created_at:'2026-07-20T00:00:00.000Z'},
+  {id:'course-reasoning',title:'Reasoning',description:'Verbal और Non-Verbal Reasoning',lessons:65,created_at:'2026-07-20T00:00:00.000Z'}
+ ];
+ const lessons=[
+  {id:'lesson-science-1',course_id:'course-science',title:'Introduction to General Science',description:'विज्ञान की मूल अवधारणाएँ',content:'यह lesson विज्ञान की मूल अवधारणाओं से शुरू होता है।',order:1},
+  {id:'lesson-math-1',course_id:'course-math',title:'Number System Basics',description:'संख्या पद्धति की शुरुआत',content:'Natural, whole और integer numbers का परिचय।',order:1}
+ ];
+ const notes=[
+  {id:'note-science',title:'General Science Notes',description:'Study material'},
+  {id:'note-math',title:'Mathematics Formula Book',description:'Important formulas'},
+  {id:'note-reasoning',title:'Reasoning Practice Notes',description:'Topic-wise notes'}
+ ];
+ const tests=[{id:'test-gs-1',title:'General Science Quiz',course_id:'course-science',questions:[{id:1,question:'भारत की राजधानी क्या है?',options:['पटना','नई दिल्ली','मुंबई'],answer:1},{id:2,question:'पानी का रासायनिक सूत्र क्या है?',options:['H₂O','CO₂','O₂'],answer:0}]}];
+ let changed=false;
+ if(!Array.isArray(db.courses)||db.courses.length===0){db.courses=courses;changed=true}
+ if(!Array.isArray(db.lessons)||db.lessons.length===0){db.lessons=lessons;changed=true}
+ if(!Array.isArray(db.notes)||db.notes.length===0){db.notes=notes;changed=true}
+ if(!Array.isArray(db.tests)||db.tests.length===0){db.tests=tests;changed=true}
+ if(!Array.isArray(db.notices)||db.notices.length===0){db.notices=[{id:'notice-welcome',title:'Welcome',message:'Rajmukhi Education में आपका स्वागत है।',created_at:new Date().toISOString()}];changed=true}
+ if(changed) saveDB();
+}
 function saveDB(){
  const tmp=DB_FILE+'.tmp';
  const payload=JSON.stringify(db,null,2);
  fs.writeFileSync(tmp,payload,{encoding:'utf8',mode:0o600});
  fs.renameSync(tmp,DB_FILE);
 }
+
+ensureStarterCatalog();
 
 const BACKUP_RETENTION = Math.max(3, Number(process.env.BACKUP_RETENTION || 14));
 const BACKUP_INTERVAL_MS = Math.max(6 * 60 * 60 * 1000, Number(process.env.BACKUP_INTERVAL_MS || 24 * 60 * 60 * 1000));

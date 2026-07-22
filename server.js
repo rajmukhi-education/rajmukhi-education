@@ -96,9 +96,6 @@ function normalizeQuestionAnswer(q){
    if(Number.isInteger(n)&&n>=0&&n<opts.length)return n;
  }
  const raw=q&&q.answer;
- // Prefer explicit 0-based answer_index. For legacy numeric answers, resolve
- // 1-based values when they are outside the valid 0-based range; otherwise
- // preserve the conventional 0-based index used by the app.
  if(typeof raw==='number'&&Number.isFinite(raw)){
    if(Number.isInteger(raw)&&raw>=0&&raw<opts.length)return raw;
    if(Number.isInteger(raw)&&raw>=1&&raw<=opts.length)return raw-1;
@@ -328,17 +325,6 @@ else {db[key]=db[key].filter(x=>x.id!==itemId);if(type==='lessons')db.progress=d
 saveDB();return send(res,200,{ok:true,deleted:itemId})}
 
 if(req.method==='POST'&&p==='/api/admin/upload'){if(!requireAdmin(req,res))return;try{const b=await readBody(req);if(!b.filename||!b.content_base64)return send(res,400,{error:'filename and content_base64 are required'});const clean=String(b.filename).replace(/[^a-zA-Z0-9._-]/g,'_');const fileName=Date.now()+'_'+clean;const filePath=path.join(UPLOAD_DIR,fileName);fs.writeFileSync(filePath,Buffer.from(b.content_base64,'base64'));const item={id:id(),filename:clean,url:'/uploads/'+fileName,size:fs.statSync(filePath).size,created_at:new Date().toISOString()};db.uploads.push(item);saveDB();return send(res,201,item)}catch{return send(res,400,{error:'upload failed'})}}
-if(req.method==='DELETE'&&p.startsWith('/api/admin/uploads/')){
- if(!requireAdmin(req,res))return;
- const uid=decodeURIComponent(p.split('/').pop());
- const idx=db.uploads.findIndex(x=>String(x.id)===String(uid));
- if(idx<0)return send(res,404,{error:'upload not found'});
- const item=db.uploads[idx];
- const fileName=path.basename(String(item.url||''));
- const fp=path.join(UPLOAD_DIR,fileName);
- try{if(fs.existsSync(fp))fs.unlinkSync(fp)}catch{}
- db.uploads.splice(idx,1);saveDB();return send(res,200,{ok:true,deleted:uid});
-}
 if(req.method==='GET'&&p==='/api/uploads'){if(!requireAdmin(req,res))return;return send(res,200,db.uploads)}
 if(req.method==='GET'&&p.startsWith('/uploads/')){const f=path.basename(p);const fp=path.join(UPLOAD_DIR,f);if(!fs.existsSync(fp))return send(res,404,{error:'file not found'});const ext=path.extname(fp).toLowerCase();const types={'.pdf':'application/pdf','.mp4':'video/mp4','.webm':'video/webm','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream','Access-Control-Allow-Origin':'*','Content-Disposition':'inline'});return fs.createReadStream(fp).pipe(res)}
 if(req.method==='GET'&&p==='/api/profile/settings'){const s=requireUser(req,res);if(!s)return;const u=db.users.find(x=>x.id===s.user_id);if(!u)return send(res,404,{error:'user not found'});return send(res,200,{settings:{email_notifications:u.email_notifications!==false,learning_reminders:u.learning_reminders!==false,certificate_updates:u.certificate_updates!==false,profile_visibility:u.profile_visibility||'private',show_email:u.show_email===true},avatar_url:u.avatar_url||null})}

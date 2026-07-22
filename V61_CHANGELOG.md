@@ -55,3 +55,11 @@
 - Starter notes now contain usable study content instead of empty placeholders.
 - Public course lesson counts now reflect the actual lesson records in the database, preventing misleading 100/80/65 counts when only a smaller number of lessons exists.
 - Preserved the V61 authentication/session, progress, dashboard, test-result, streak, enrollment and certificate fixes.
+
+## V61 Admin Complete Final
+- Added complete admin content workflow for courses, lessons, notes/PDFs, videos, notices, tests, uploads, and students.
+- Added student management and admin enrollment controls.
+- Added course selection to test creation.
+- Fixed note text persistence so text notes are stored and displayed.
+- Added content listing and deletion from the admin panel.
+- Added safer upload size validation and clearer upload URL workflow.

@@ -32,3 +32,15 @@
 - Directly addresses repeated `Progress save नहीं हुआ: authentication required` failures when browser token and server session become out of sync.
 
 - Fixed dashboard consistency: saving lesson progress now automatically creates the student's enrollment when a legacy or direct progress record exists without enrollment. This prevents Completed Lessons > 0 while Enrolled Courses = 0.
+
+
+## V61 FINAL ONE-PASS AUDIT FIXES — 2026-07-22
+
+- Fixed dashboard average-score calculation to use persisted server-side test results, including legacy `student_id`/`user_id` result records.
+- Fixed learning streak calculation to use real learning activity dates from test results, completed progress, and enrollments.
+- Fixed test submission flow so a result is not silently lost: authentication is required and the server result must save successfully before the UI reports completion.
+- Fixed profile results to read the authenticated user's server-side results instead of relying only on stale local browser history.
+- Strengthened session refresh fallback by sending the current bearer token as well as relying on the HttpOnly cookie.
+- Preserved enrollment/progress consistency and verified the automatic enrollment behavior when progress is saved.
+- Verified end-to-end flow: register → authenticate → enroll → complete lesson → submit 2/2 test → dashboard reports 100% average score and active streak.
+- `server.js` syntax check passed.

@@ -90,12 +90,26 @@ function createAutomaticBackup(){
 }
 function id(){return crypto.randomUUID()}
 function normalizeQuestionAnswer(q){
- const raw=q&&q.answer;
- if(typeof raw==='number'&&Number.isFinite(raw)) return raw;
- const s=String(raw??'').trim();
- if(/^\\d+$/.test(s)) return Number(s);
- if(/^[A-Za-z]$/.test(s)) return s.toUpperCase().charCodeAt(0)-65;
  const opts=Array.isArray(q&&q.options)?q.options:[];
+ if(q&&q.answer_index!==undefined&&q.answer_index!==null){
+   const n=Number(q.answer_index);
+   if(Number.isInteger(n)&&n>=0&&n<opts.length)return n;
+ }
+ const raw=q&&q.answer;
+ if(typeof raw==='number'&&Number.isFinite(raw)){
+   if(Number.isInteger(raw)&&raw>=0&&raw<opts.length)return raw;
+   if(Number.isInteger(raw)&&raw>=1&&raw<=opts.length)return raw-1;
+ }
+ const s=String(raw??'').trim();
+ if(/^\d+$/.test(s)){
+   const n=Number(s);
+   if(n>=0&&n<opts.length)return n;
+   if(n>=1&&n<=opts.length)return n-1;
+ }
+ if(/^[A-Za-z]$/.test(s)){
+   const n=s.toUpperCase().charCodeAt(0)-65;
+   return n>=0&&n<opts.length?n:0;
+ }
  const i=opts.findIndex(o=>String(o).trim().toLowerCase()===s.toLowerCase());
  return i>=0?i:0;
 }
@@ -227,8 +241,27 @@ if(req.method==='GET'&&p==='/api/notes')return send(res,200,db.notes);
 if(req.method==='GET'&&p==='/api/notices')return send(res,200,db.notices);
 if(req.method==='GET'&&p==='/api/videos')return send(res,200,db.videos);
 if(req.method==='GET'&&p==='/api/tests')return send(res,200,db.tests.map(t=>({id:t.id,title:t.title,course_id:t.course_id,questionCount:t.questions.length,created_at:t.created_at})));
-if(req.method==='GET'&&p.startsWith('/api/tests/')){const t=db.tests.find(x=>x.id===p.split('/').pop());return t?send(res,200,t):send(res,404,{error:'Test not found'})}
-if(req.method==='POST'&&p==='/api/results'){const s=requireUser(req,res);if(!s)return;try{const b=await readBody(req);if(!b.test_id||typeof b.score!=='number'||typeof b.total!=='number')return send(res,400,{error:'test_id, score and total are required'});const r={id:id(),student_id:s.user_id,test_id:b.test_id,score:b.score,total:b.total,created_at:new Date().toISOString()};db.results.push(r);saveDB();return send(res,201,r)}catch{return send(res,400,{error:'invalid JSON'})}}
+if(req.method==='GET'&&p.startsWith('/api/tests/')){
+ const s=requireUser(req,res); if(!s)return;
+ const t=db.tests.find(x=>x.id===p.split('/').pop());
+ if(!t)return send(res,404,{error:'Test not found'});
+ const safe={...t,questions:t.questions.map(q=>({id:q.id,question:q.question,options:q.options}))};
+ return send(res,200,safe);
+}
+if(req.method==='POST'&&p==='/api/results'){
+ const s=requireUser(req,res);if(!s)return;
+ try{
+  const b=await readBody(req);
+  if(!b.test_id)return send(res,400,{error:'test_id is required'});
+  const t=db.tests.find(x=>x.id===String(b.test_id));
+  if(!t)return send(res,404,{error:'test not found'});
+  const answers=Array.isArray(b.answers)?b.answers:[];
+  const score=t.questions.reduce((sum,q,i)=>sum+(Number(answers[i])===normalizeQuestionAnswer(q)?1:0),0);
+  const total=t.questions.length;
+  const r={id:id(),student_id:s.user_id,test_id:t.id,score,total,answers:answers.map(x=>Number.isFinite(Number(x))?Number(x):null),created_at:new Date().toISOString()};
+  db.results.push(r);saveDB();return send(res,201,r);
+ }catch{return send(res,400,{error:'invalid JSON'})}
+}
 if(req.method==='GET'&&p==='/api/results'){const s=requireUser(req,res);if(!s)return;const all=s.role==='admin'?db.results:db.results.filter(r=>String(r.student_id||r.user_id)===String(s.user_id));return send(res,200,all)}
 if(req.method==='GET'&&p==='/api/students'){if(!requireAdmin(req,res))return;return send(res,200,db.students)}
 if(req.method==='GET'&&p.startsWith('/api/admin/students/')){if(!requireAdmin(req,res))return;const sid=p.split('/').pop();const u=db.users.find(x=>x.id===sid)||db.students.find(x=>x.id===sid);if(!u)return send(res,404,{error:'Student not found'});const results=db.results.filter(x=>x.student_id===sid);const progress=db.progress.filter(x=>x.user_id===sid);return send(res,200,{student:safeUser(u),results,progress,enrollments:db.enrollments.filter(x=>x.user_id===sid)})}
@@ -253,7 +286,7 @@ if(req.method==='PUT'&&p.startsWith('/api/admin/tests/')){if(!requireAdmin(req,r
 if(req.method==='POST'&&p==='/api/admin/notes'){if(!requireAdmin(req,res))return;const b=await readBody(req);if(!b.title)return send(res,400,{error:'title is required'});const x={id:id(),title:String(b.title),description:b.description||'',content:b.content||'',file_url:b.file_url||'',created_at:new Date().toISOString()};db.notes.push(x);saveDB();return send(res,201,x)}
 if(req.method==='POST'&&p==='/api/admin/videos'){if(!requireAdmin(req,res))return;const b=await readBody(req);if(!b.title||!b.url)return send(res,400,{error:'title and url are required'});const x={id:id(),title:String(b.title),description:b.description||'',url:String(b.url),thumbnail:b.thumbnail||'',created_at:new Date().toISOString()};db.videos.unshift(x);saveDB();return send(res,201,x)}
 if(req.method==='POST'&&p==='/api/admin/notices'){if(!requireAdmin(req,res))return;const b=await readBody(req);if(!b.title||!b.message)return send(res,400,{error:'title and message are required'});const x={id:id(),title:String(b.title),message:String(b.message),created_at:new Date().toISOString()};db.notices.unshift(x);saveDB();return send(res,201,x)}
-if(req.method==='POST'&&p==='/api/admin/tests'){if(!requireAdmin(req,res))return;const b=await readBody(req);if(!b.title||!Array.isArray(b.questions)||!b.questions.length)return send(res,400,{error:'title and questions are required'});const qs=b.questions.map((q,i)=>({id:i+1,question:String(q.question),options:Array.isArray(q.options)?q.options.map(String):[],answer:normalizeQuestionAnswer(q)}));const x={id:id(),title:String(b.title),course_id:b.course_id||'',questions:qs,created_at:new Date().toISOString()};db.tests.push(x);saveDB();return send(res,201,x)}
+if(req.method==='POST'&&p==='/api/admin/tests'){if(!requireAdmin(req,res))return;const b=await readBody(req);if(!b.title||!Array.isArray(b.questions)||!b.questions.length)return send(res,400,{error:'title and questions are required'});const qs=b.questions.map((q,i)=>{const options=Array.isArray(q.options)?q.options.map(String):[];const answer_index=normalizeQuestionAnswer(q);return {id:i+1,question:String(q.question),options,answer_index,answer:answer_index};});const x={id:id(),title:String(b.title),course_id:b.course_id||'',questions:qs,created_at:new Date().toISOString()};db.tests.push(x);saveDB();return send(res,201,x)}
 
 if(req.method==='GET'&&p.match(/^\/api\/certificates\/verify\/[^/]+$/)){const cert=db.certificates.find(x=>x.certificate_no===decodeURIComponent(p.split('/').pop()));if(!cert)return send(res,404,{valid:false,error:'certificate not found'});const valid=cert.status!=='revoked';return send(res,200,{valid,certificate:{certificate_no:cert.certificate_no,student_name:cert.student_name,course_title:cert.course_title,issued_at:cert.issued_at,course_id:cert.course_id,verification_hash:cert.verification_hash,status:cert.status||'active'}})}
 if(req.method==='GET'&&p==='/api/certificates'){const s=requireUser(req,res);if(!s)return;return send(res,200,db.certificates.filter(x=>x.user_id===s.user_id))}

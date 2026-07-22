@@ -18,7 +18,16 @@ function register(){const name=document.getElementById('name').value.trim(),emai
 function studentLogin(){const email=document.getElementById('email').value.trim(),pass=document.getElementById('pass').value;api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password:pass})}).then(setSession).catch(e=>alert(e.message))}
 async function setSession(x){authToken=x.token;user=x.user;localStorage.setItem('rde_token',authToken);localStorage.setItem('rde_user',JSON.stringify(user));try{enrollments=await api('/api/enrollments');progressData=await api('/api/progress')}catch(e){}closeM();home()}
 function courseDetail(id){const c=courseData.find(x=>x.id===id);if(!c)return;api('/api/lessons?course_id='+encodeURIComponent(id)).then(ls=>{let enrolled=enrollments.some(e=>e.course_id===id);let done=progressData.filter(p=>p.course_id===id&&p.completed).length;box.innerHTML='<h2>📘 '+esc(c.title)+'</h2><p>'+esc(c.description||'')+'</p><p class="small">Progress: '+done+'/'+ls.length+' lessons completed</p>'+(!enrolled?'<button onclick="enroll('+JSON.stringify(id)+')">Enroll in Course</button>':'<span class="badge">✓ Enrolled</span>')+'<hr>'+ls.map(l=>{let complete=progressData.some(p=>p.lesson_id===l.id&&p.completed);return '<div class="quizq"><b>'+esc(l.title)+'</b><p class="small">'+esc(l.description||'')+'</p><button onclick="toggleLesson('+JSON.stringify(id)+','+JSON.stringify(l.id)+','+(complete?'false':'true')+')">'+(complete?'↩ Mark incomplete':'✓ Mark complete')+'</button><button onclick="openLessonContentById('+JSON.stringify(l.id)+')">📖 Open</button></div>'}).join('');window.lessonCache=ls;modal.style.display='flex'}).catch(e=>alert(e.message))}
-function openLessonContentById(id){const l=(window.lessonCache||[]).find(x=>x.id===id);if(l)openLessonContent(l)}
+async function openLessonContentById(id){
+ try{
+  let l=(window.lessonCache||[]).find(x=>x.id===id);
+  if(!l){
+   const all=await api('/api/lessons');
+   l=all.find(x=>x.id===id);
+  }
+  if(l)openLessonContent(l); else alert('Lesson content उपलब्ध नहीं है।');
+ }catch(e){alert('Lesson load नहीं हो सका: '+e.message)}
+}
 async function enroll(id){if(!authToken){return login()}await api('/api/enrollments',{method:'POST',body:JSON.stringify({course_id:id})});enrollments=await api('/api/enrollments');modal.style.display='none';courses()}
 async function toggleLesson(courseId,lessonId,completed){if(!authToken){return login()}await api('/api/progress',{method:'POST',body:JSON.stringify({course_id:courseId,lesson_id:lessonId,completed})});progressData=await api('/api/progress');courseDetail(courseId)}
 function profile(){if(!user)return login();box.innerHTML=`<h2>👤 My Profile</h2><div class="panel"><b>${user.name}</b><br>${user.email}<br><span class="badge">${user.role}</span></div><h3>📊 My Results</h3>${scoreHistory.length?scoreHistory.map(s=>`<div class="course">📝 ${s.date}<br><b>Score: ${s.score}/${s.total}</b></div>`).join(''):'<p>अभी कोई test result नहीं है।'}<button onclick="studentDashboard()">🎓 My Learning</button><button onclick="logout()">Logout</button><button onclick="closeM()">Close</button>`;modal.style.display='flex'}
@@ -54,6 +63,15 @@ async function deleteLesson(id){if(!confirm('Delete this lesson?'))return;await 
 
 function openNote(n){box.innerHTML='<h2>📄 '+esc(n.title||'Study Note')+'</h2><p>'+esc(n.description||'')+'</p>'+(n.url?'<iframe src="'+esc(n.url)+'" style="width:100%;height:60vh;border:0"></iframe>':'<div class="quizq">'+esc(n.content||'No content available')+'</div>');modal.style.display='flex'}
 function openVideo(v){box.innerHTML='<h2>🎥 '+esc(v.title||'Video Class')+'</h2>'+(v.url&&/youtube|youtu\.be/.test(v.url)?'<iframe src="'+esc(v.url.replace('watch?v=','embed/'))+'" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen></iframe>':'<video controls style="width:100%;max-height:60vh" src="'+esc(v.url||'')+'"></video>');modal.style.display='flex'}
+function formatLessonContent(content){
+ const text=String(content||'Lesson content will be added soon.');
+ return esc(text).split('\n\n').map(block=>{
+  const lines=block.split('\n');
+  if(lines.every(x=>/^\s*[•📌🧠✍️]|^\s*\d+\./.test(x))) return '<ul>'+lines.map(x=>'<li>'+x.replace(/^\s*(?:•|\d+\.\s*)/,'')+'</li>').join('')+'</ul>';
+  return '<p>'+lines.join('<br>')+'</p>';
+ }).join('');
+}
+
 async function openLessonContent(l){
  try{
   const all=await api('/api/lessons?course_id='+encodeURIComponent(l.course_id));
@@ -68,7 +86,7 @@ async function openLessonContent(l){
    '<div class="lesson-progress"><span style="width:'+percent+'%"></span></div>'+
    '<h2>📖 '+esc(current.title)+'</h2>'+
    '<p class="small">'+esc(current.description||'')+'</p>'+
-   '<div class="lesson-content">'+esc(current.content||'Lesson content will be added soon.')+'</div>'+
+   '<div class="lesson-content">'+formatLessonContent(current.content||'Lesson content will be added soon.')+'</div>'+
    '<button onclick="completeAndContinue('+JSON.stringify(current.course_id)+','+JSON.stringify(current.id)+','+(done?'false':'true')+')">'+(done?'↩ Mark incomplete':'✓ Mark as completed')+'</button>'+
    '<div class="lesson-nav">'+
    (index>0?'<button onclick="openLessonContentById('+JSON.stringify(lessons[index-1].id)+')">← Previous</button>':'<span></span>')+

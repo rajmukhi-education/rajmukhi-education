@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const PORT = Number(process.env.PORT || 3000);
-const APP_VERSION = 'v53-production';
+const APP_VERSION = 'v61-production';
 const DB_FILE = path.join(__dirname, 'data.json');
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const BACKUP_DIR = path.join(__dirname, 'backups');
@@ -107,7 +107,7 @@ function send(res,status,data,headers={}){
  if(IS_PRODUCTION)base['Strict-Transport-Security']='max-age=31536000; includeSubDomains';
  res.writeHead(status,{...base,...headers});res.end(JSON.stringify(data))
 }
-function clientIp(req){return String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim()}
+function clientIp(req){return String(req.socket.remoteAddress||'unknown').trim()}
 function rateLimited(req,key){
  const now=Date.now(), bucketKey=key+':'+clientIp(req), arr=(rateBuckets.get(bucketKey)||[]).filter(t=>now-t<RATE_WINDOW_MS);
  arr.push(now);rateBuckets.set(bucketKey,arr);
@@ -314,6 +314,6 @@ if (IS_PRODUCTION && USING_DEFAULT_ADMIN_CREDENTIALS) console.warn('WARNING: ADM
 if(cleanupTimer.unref) cleanupTimer.unref();
 server.listen(PORT,()=>console.log(`Rajmukhi Education ${APP_VERSION} running on port ${PORT}`));
 function shutdown(signal){
- clearInterval(cleanupTimer);console.log(`${signal} received, shutting down...`);server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10000).unref()}
+ clearInterval(cleanupTimer);clearInterval(automaticBackupTimer);console.log(`${signal} received, shutting down...`);server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10000).unref()}
 process.on('SIGTERM',()=>shutdown('SIGTERM'));
 process.on('SIGINT',()=>shutdown('SIGINT'));

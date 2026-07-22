@@ -63,3 +63,13 @@
 - Fixed note text persistence so text notes are stored and displayed.
 - Added content listing and deletion from the admin panel.
 - Added safer upload size validation and clearer upload URL workflow.
+
+
+## V61 Admin All-in-One Final
+- Added full admin CRUD for courses, lessons, notes/PDFs, videos, notices, and tests.
+- Added lesson creation/edit/delete with course assignment and automatic course lesson counts.
+- Added edit flows for all major content types.
+- Added cascading course deletion for lessons, enrollments, progress, and course tests.
+- Added admin export endpoint for complete educational data.
+- Added upload library listing.
+- Preserved the admin login redirect fix.

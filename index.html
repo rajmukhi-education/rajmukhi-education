@@ -67,7 +67,10 @@ function normalizeAnswer(q){
 }
 async function submitDynamicTest(id,total){
  const t=window.currentTest;
- const answers=t.questions.map((q,i)=>Number.isFinite(Number(window.testAnswers[i]))?Number(window.testAnswers[i]):null);
+ const answers=t.questions.map((q,i)=>{
+ const v=window.testAnswers[i];
+ return (v!==null&&v!==undefined&&v!=='') ? Number(v) : null;
+});
  if(!await ensureAuthenticated())return;
  try{
   const saved=await api('/api/results',{method:'POST',body:JSON.stringify({test_id:id,answers})});
@@ -93,10 +96,19 @@ async function toggleLesson(courseId,lessonId,completed){if(!await ensureAuthent
 async function profile(){if(!await ensureAuthenticated())return;try{const results=await api('/api/results');box.innerHTML=`<h2>👤 My Profile</h2><div class="panel"><b>${esc(user.name)}</b><br>${esc(user.email)}<br><span class="badge">${esc(user.role)}</span></div><h3>📊 My Results</h3>${results.length?results.slice().reverse().map(s=>`<div class="course">📝 ${new Date(s.created_at).toLocaleString('hi-IN')}<br><b>Score: ${esc(s.score)}/${esc(s.total)}</b></div>`).join(''):'<p>अभी कोई test result नहीं है।'}<button onclick="studentDashboard()">🎓 My Learning</button><button onclick="logout()">Logout</button><button onclick="closeM()">Close</button>`;modal.style.display='flex'}catch(e){alert(e.message)}}
 async function logout(){try{await api('/api/auth/logout',{method:'POST'})}catch(e){}user=null;authToken='';localStorage.removeItem('rde_user');localStorage.removeItem('rde_token');closeM();home()}
 function admin(){box.innerHTML=`<h2>🔐 Admin Login</h2><input id="adminPass" type="password" placeholder="Admin Password"><button onclick="adminAuth()">Login</button><button onclick="closeM()">Close</button>`;modal.style.display='flex'}
+function setSession(x){
+ if(!x||!x.token||!x.user) throw new Error('Login response में session token नहीं मिला');
+ authToken=String(x.token);
+ user=x.user;
+ localStorage.setItem('rde_token',authToken);
+ localStorage.setItem('rde_user',JSON.stringify(user));
+ return true;
+}
 async function adminAuth(){
  try{
   const x=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:'admin@rajmukhi.education',password:document.getElementById('adminPass').value})});
-  await setSession(x);
+  setSession(x);
+  await loadCloudData();
   adminDashboard();
  }catch(e){alert(e.message)}
 }

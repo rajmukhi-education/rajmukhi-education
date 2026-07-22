@@ -1,0 +1,10 @@
+Rajmukhi Education v10
+Frontend now checks the local backend API health endpoint:
+GET http://localhost:3000/api/health
+
+To test:
+1. Run: node server.js
+2. Open index.html through a local web server (not file:// for browser CORS restrictions).
+3. The Admin Panel can show API status when connected.
+
+This remains a development integration. Production deployment needs HTTPS, a hosted backend/database, secure auth, CORS configuration, and persistent storage.

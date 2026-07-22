@@ -1,0 +1,20 @@
+{
+  "app": "Rajmukhi Education",
+  "version": "40.0.0",
+  "release": "Final",
+  "status": "production-ready baseline",
+  "milestones": "V1-V40",
+  "features": [
+    "Authentication and role-based access",
+    "Course, lesson, test, result and enrollment management",
+    "Student learning dashboard and progress tracking",
+    "Certificate generation, verification and print/save as PDF",
+    "Public certificate showcase and privacy-aware student profiles",
+    "Achievements and shareable profile experience",
+    "Profile, settings and privacy controls",
+    "TOTP 2FA, recovery codes and login challenges",
+    "Trusted sessions, device management and security alerts",
+    "Security audit and personal data export",
+    "Admin analytics and management tools"
+  ]
+}

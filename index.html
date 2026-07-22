@@ -87,12 +87,17 @@ async function openLessonContent(l){
    '<h2>📖 '+esc(current.title)+'</h2>'+
    '<p class="small">'+esc(current.description||'')+'</p>'+
    '<div class="lesson-content">'+formatLessonContent(current.content||'Lesson content will be added soon.')+'</div>'+
-   '<button id="completeLessonBtn" onclick="completeAndContinue('+JSON.stringify(current.course_id)+','+JSON.stringify(current.id)+','+(done?'false':'true')+')">'+(done?'↩ Mark incomplete':'✓ Mark as completed')+'</button>'+
+   '<button id="completeLessonBtn" type="button">'+(done?'↩ Mark incomplete':'✓ Mark as completed')+'</button>'+
    '<div class="lesson-nav">'+
    (index>0?'<button onclick="openLessonContentById('+JSON.stringify(lessons[index-1].id)+')">← Previous</button>':'<span></span>')+
    (index<lessons.length-1?'<button onclick="openLessonContentById('+JSON.stringify(lessons[index+1].id)+')">Next →</button>':'<span></span>')+
    '</div></div>';
-  window.lessonCache=lessons; modal.style.display='flex';
+  window.lessonCache=lessons;
+  modal.style.display='flex';
+  const completeBtn=document.getElementById('completeLessonBtn');
+  if(completeBtn){
+    completeBtn.onclick=()=>completeAndContinue(String(current.course_id),String(current.id),!done);
+  }
  }catch(e){alert(e.message)}
 }
 async function completeAndContinue(courseId,lessonId,completed){
@@ -100,17 +105,19 @@ async function completeAndContinue(courseId,lessonId,completed){
  const btn=document.getElementById('completeLessonBtn');
  if(btn){btn.disabled=true;btn.textContent='⏳ Saving...'}
  try{
-  const saved=await api('/api/progress',{method:'POST',body:JSON.stringify({course_id:String(courseId),lesson_id:String(lessonId),completed:!!completed})});
+  const payload={course_id:String(courseId),lesson_id:String(lessonId),completed:Boolean(completed)};
+  await api('/api/progress',{method:'POST',body:JSON.stringify(payload)});
   progressData=await api('/api/progress');
   const lessons=window.lessonCache||[];
   const i=lessons.findIndex(x=>String(x.id)===String(lessonId));
   const currentLesson=lessons[i]||{id:lessonId,course_id:courseId};
-  if(btn){btn.disabled=false;btn.textContent=completed?'✓ Completed':'↩ Mark incomplete'}
-  if(completed&&i>=0&&i<lessons.length-1){
-    openLessonContent(lessons[i+1]);
+  if(completed){
+    if(btn){btn.disabled=false;btn.textContent='✓ Completed'}
   }else{
-    openLessonContent(currentLesson);
+    if(btn){btn.disabled=false;btn.textContent='✓ Mark as completed'}
   }
+  // Re-render the current lesson so the saved state is reflected immediately.
+  await openLessonContent(currentLesson);
  }catch(e){
   if(btn){btn.disabled=false;btn.textContent=completed?'✓ Mark as completed':'↩ Mark incomplete'}
   alert('Progress save नहीं हुआ: '+e.message)

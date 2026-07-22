@@ -22,3 +22,13 @@
 - Cookie-authenticated progress save verified.
 - Cookie-authenticated progress read verified.
 - Bearer-token authentication verified.
+
+
+## V61 FINAL AUTH/PROGRESS FIX
+- Added resilient `/api/auth/refresh` session recovery using the existing HttpOnly session cookie.
+- Frontend API requests now send both `Authorization: Bearer` and `X-Session-Token` and automatically refresh/retry once after a 401.
+- Added `cache: no-store` to API requests to avoid stale auth responses.
+- Removed duplicate `Set-Cookie` assignment from login.
+- Directly addresses repeated `Progress save नहीं हुआ: authentication required` failures when browser token and server session become out of sync.
+
+- Fixed dashboard consistency: saving lesson progress now automatically creates the student's enrollment when a legacy or direct progress record exists without enrollment. This prevents Completed Lessons > 0 while Enrolled Courses = 0.

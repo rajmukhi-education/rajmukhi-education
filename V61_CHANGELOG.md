@@ -44,3 +44,14 @@
 - Preserved enrollment/progress consistency and verified the automatic enrollment behavior when progress is saved.
 - Verified end-to-end flow: register → authenticate → enroll → complete lesson → submit 2/2 test → dashboard reports 100% average score and active streak.
 - `server.js` syntax check passed.
+
+
+## V61 COMPLETE ONE-PASS CONTENT/UI FIXES — 2026-07-22
+
+- Replaced the dashboard's certificate placeholder alert with the real certificate generation and view/print flow.
+- Notes & PDFs now open actual note content or an attached PDF/file in the reader.
+- Video Classes now open YouTube links in an embedded player and local uploaded video files in the native video player.
+- Admin Content Manager can now save text-based note content as well as PDF/file URLs.
+- Starter notes now contain usable study content instead of empty placeholders.
+- Public course lesson counts now reflect the actual lesson records in the database, preventing misleading 100/80/65 counts when only a smaller number of lessons exists.
+- Preserved the V61 authentication/session, progress, dashboard, test-result, streak, enrollment and certificate fixes.

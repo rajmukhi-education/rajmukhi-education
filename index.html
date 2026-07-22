@@ -1,4 +1,4 @@
-<!doctype html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rajmukhi Education — V55</title><style>
+<!doctype html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rajmukhi Education — V58</title><style>
 *{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f6f4ff;color:#21184f}header{background:linear-gradient(135deg,#4b2aa8,#7048cf);color:#fff;padding:22px 18px 25px;border-radius:0 0 26px 26px}h1{margin:0;font-size:25px}.tag{opacity:.9;margin-top:5px}.search{background:#fff;color:#777;padding:13px;border-radius:13px;margin-top:17px}main{padding:16px 16px 82px}.welcome{background:linear-gradient(135deg,#5c35b8,#8a64d8);color:#fff;padding:20px;border-radius:18px;margin-bottom:16px}.welcome h2{margin:0 0 8px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card,.course,.panel{background:#fff;border-radius:15px;padding:16px;box-shadow:0 3px 12px #0000000d}.card{cursor:pointer}.icon{font-size:29px}.card h3{margin:8px 0 4px;font-size:16px}.card p,.course p{margin:0;color:#777;font-size:12px}.section{display:flex;justify-content:space-between;align-items:center;margin:20px 0 10px}.section h2{margin:0;font-size:18px}.course{display:flex;gap:12px;align-items:center;margin-bottom:10px;cursor:pointer}.book{font-size:28px}.course h3{margin:0 0 5px;font-size:15px}button{border:0;background:#5a35b7;color:#fff;border-radius:9px;padding:10px 14px;font-weight:bold;cursor:pointer;margin:3px}.bottom{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;justify-content:space-around;padding:10px 4px;border-top:1px solid #eee}.bottom span{text-align:center;font-size:11px;cursor:pointer}.bottom b{display:block;font-size:20px}.modal{display:none;position:fixed;inset:0;background:#0008;align-items:center;justify-content:center;padding:20px}.modalbox{background:#fff;border-radius:18px;padding:22px;width:100%;max-width:500px;max-height:92vh;overflow:auto}.lesson-reader{background:#fff;border-radius:18px;padding:20px;box-shadow:0 3px 12px #0000000d}.lesson-reader h2{margin:0 0 8px;font-size:22px}.lesson-content{font-size:16px;line-height:1.75;color:#333;white-space:pre-wrap;margin:16px 0}.lesson-progress{height:8px;background:#eee8ff;border-radius:10px;overflow:hidden;margin:10px 0 16px}.lesson-progress span{display:block;height:100%;background:#5a35b7;border-radius:10px}.lesson-nav{display:flex;justify-content:space-between;gap:8px;margin-top:18px}.lesson-nav button{flex:1}.modalbox input,.modalbox textarea,.modalbox select{width:100%;padding:12px;margin:7px 0;border:1px solid #ddd;border-radius:9px}.quizq{margin:12px 0;padding:14px;background:#f7f5ff;border-radius:12px}.option{display:block;width:100%;margin:7px 0;background:#fff;color:#222;border:1px solid #ddd;text-align:left}.badge{display:inline-block;background:#eee8ff;padding:5px 9px;border-radius:20px;font-size:12px;margin:3px}.video{width:100%;border-radius:12px;margin-top:8px}.small{font-size:12px;color:#777}.danger{background:#a62828}.row{display:flex;gap:6px;flex-wrap:wrap}
 </style><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#5a35b7"></head><body><header><h1>Rajmukhi Education</h1><div class="tag">ज्ञान से सफलता की ओर</div><input class="search" id="search" placeholder="🔍 Search courses, notes, tests..." oninput="searchAll(this.value)"></header><main id="app"></main><nav class="bottom"><span onclick="home()"><b>🏠</b>Home</span><span onclick="courses()"><b>📚</b>Courses</span><span onclick="tests()"><b>📝</b>Tests</span><span onclick="notes()"><b>📄</b>Notes</span><span onclick="profile()"><b>👤</b>Profile</span></nav><div class="modal" id="modal"><div class="modalbox" id="box"></div></div><script>
 const app=document.getElementById('app'),modal=document.getElementById('modal'),box=document.getElementById('box');let user=JSON.parse(localStorage.getItem('rde_user')||'null'),authToken=localStorage.getItem('rde_token')||'',scoreHistory=JSON.parse(localStorage.getItem('rde_scores')||'[]');let courseData=[],notesData=[],noticesData=[],testsData=[],videosData=[],enrollments=[],progressData=[];const API_BASE=localStorage.getItem('rde_backend_url')||window.location.origin;
@@ -87,7 +87,7 @@ async function openLessonContent(l){
    '<h2>📖 '+esc(current.title)+'</h2>'+
    '<p class="small">'+esc(current.description||'')+'</p>'+
    '<div class="lesson-content">'+formatLessonContent(current.content||'Lesson content will be added soon.')+'</div>'+
-   '<button onclick="completeAndContinue('+JSON.stringify(current.course_id)+','+JSON.stringify(current.id)+','+(done?'false':'true')+')">'+(done?'↩ Mark incomplete':'✓ Mark as completed')+'</button>'+
+   '<button id="completeLessonBtn" onclick="completeAndContinue('+JSON.stringify(current.course_id)+','+JSON.stringify(current.id)+','+(done?'false':'true')+')">'+(done?'↩ Mark incomplete':'✓ Mark as completed')+'</button>'+
    '<div class="lesson-nav">'+
    (index>0?'<button onclick="openLessonContentById('+JSON.stringify(lessons[index-1].id)+')">← Previous</button>':'<span></span>')+
    (index<lessons.length-1?'<button onclick="openLessonContentById('+JSON.stringify(lessons[index+1].id)+')">Next →</button>':'<span></span>')+
@@ -97,14 +97,24 @@ async function openLessonContent(l){
 }
 async function completeAndContinue(courseId,lessonId,completed){
  if(!authToken){return login()}
+ const btn=document.getElementById('completeLessonBtn');
+ if(btn){btn.disabled=true;btn.textContent='⏳ Saving...'}
  try{
-  await api('/api/progress',{method:'POST',body:JSON.stringify({course_id:courseId,lesson_id:lessonId,completed})});
+  const saved=await api('/api/progress',{method:'POST',body:JSON.stringify({course_id:String(courseId),lesson_id:String(lessonId),completed:!!completed})});
   progressData=await api('/api/progress');
   const lessons=window.lessonCache||[];
-  const i=lessons.findIndex(x=>x.id===lessonId);
-  if(completed&&i>=0&&i<lessons.length-1) openLessonContent(lessons[i+1]);
-  else openLessonContent(lessons[i]||{id:lessonId,course_id:courseId});
- }catch(e){alert(e.message)}
+  const i=lessons.findIndex(x=>String(x.id)===String(lessonId));
+  const currentLesson=lessons[i]||{id:lessonId,course_id:courseId};
+  if(btn){btn.disabled=false;btn.textContent=completed?'✓ Completed':'↩ Mark incomplete'}
+  if(completed&&i>=0&&i<lessons.length-1){
+    openLessonContent(lessons[i+1]);
+  }else{
+    openLessonContent(currentLesson);
+  }
+ }catch(e){
+  if(btn){btn.disabled=false;btn.textContent=completed?'✓ Mark as completed':'↩ Mark incomplete'}
+  alert('Progress save नहीं हुआ: '+e.message)
+ }
 }
 
 
